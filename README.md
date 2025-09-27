@@ -23,9 +23,17 @@ Run the script from the repository root:
 python scripts/download_marketables.py
 ```
 
+To download a specific month's report instead of the latest one, provide the
+`--report-date` option using a `YYYY-MM` value:
+
+```bash
+python scripts/download_marketables.py --report-date 2024-05
+```
+
 The script will:
 
-1. Download the most recent MSPD `Entire` Excel file to `outputs/data/`.
+1. Download the requested (latest by default) MSPD `Entire` Excel file to
+   `outputs/data/`.
 2. Extract the CUSIP, maturity date, and outstanding balance (in millions of
    dollars) for marketable securities, saving the cleaned dataset to
    `outputs/data/marketable_outstanding.csv`.

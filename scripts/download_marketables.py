@@ -3,6 +3,7 @@ and plot outstanding balances by maturity date.
 """
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -223,17 +224,75 @@ def plot_outstanding_by_maturity(data: pd.DataFrame) -> None:
     plt.show()
 
 
-def main() -> None:
-    page_data = fetch_page_data()
-    reports = list(iter_entire_reports(page_data))
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Download the MSPD 'Entire' workbook, extract marketable securities "
+            "data, and plot outstanding balances by maturity date."
+        )
+    )
+    parser.add_argument(
+        "--report-date",
+        metavar="YYYY-MM",
+        help=(
+            "Report month to download (defaults to the latest available report). "
+            "Use the format YYYY-MM, e.g. 2024-05."
+        ),
+    )
+    return parser.parse_args()
+
+
+def _select_report(
+    reports: Iterable[Report], report_date: str | None
+) -> Report:
+    reports = list(reports)
     if not reports:
         raise SystemExit("No Excel 'Entire' reports found in page data")
 
-    latest_report = max(reports, key=lambda r: r.report_date)
-    print(f"Latest report date: {latest_report.report_date:%Y-%m-%d}")
+    if report_date is None:
+        selected = max(reports, key=lambda r: r.report_date)
+        print(
+            "No report date specified; using latest report "
+            f"({selected.report_date:%Y-%m-%d})."
+        )
+        return selected
+
+    try:
+        target = datetime.strptime(report_date, "%Y-%m")
+    except ValueError as exc:  # pragma: no cover - defensive programming
+        raise SystemExit(
+            "--report-date must be in YYYY-MM format (e.g. 2024-05)"
+        ) from exc
+
+    matching = [
+        r
+        for r in reports
+        if r.report_date.year == target.year and r.report_date.month == target.month
+    ]
+    if not matching:
+        available_months = sorted(
+            {r.report_date.strftime("%Y-%m") for r in reports}
+        )
+        raise SystemExit(
+            "No report found for the requested month "
+            f"({target:%Y-%m}); available months include "
+            f"{', '.join(available_months)}."
+        )
+
+    selected = max(matching, key=lambda r: r.report_date)
+    print(f"Using report dated {selected.report_date:%Y-%m-%d}.")
+    return selected
+
+
+def main() -> None:
+    args = _parse_args()
+
+    page_data = fetch_page_data()
+    reports = list(iter_entire_reports(page_data))
+    selected_report = _select_report(reports, args.report_date)
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    xls_path = download_file(latest_report, DATA_DIR / latest_report.filename)
+    xls_path = download_file(selected_report, DATA_DIR / selected_report.filename)
     print(f"Downloaded Excel file to {xls_path}")
 
     marketable = extract_marketable_data(xls_path)
