@@ -83,8 +83,35 @@ def _detect_cusip_column(df: pd.DataFrame) -> Tuple[str, str]:
     return best_col
 
 
+SECURITY_TYPE_MAPPING = {
+    "Treasury Bills (Maturity Value):": "T-Bills",
+    "Treasury Notes:": "T-Notes",
+    "Treasury Bonds:": "T-Bonds",
+    "Treasury Inflation-Protected Securities:": "TIPS",
+    "Treasury Floating Rate Notes:": "FRNs",
+}
+
+
+def _detect_security_type_column(df: pd.DataFrame) -> Tuple[str, str]:
+    """Return the multi-index column containing the security type labels."""
+
+    candidates = [col for col in df.columns if col[0] == "Loan Description"]
+    best_col: Tuple[str, str] | None = None
+    best_score = 0
+    for col in candidates:
+        series = df[col].astype(str)
+        mask = series.str.contains("Treasury", case=False, na=False)
+        score = series[mask].nunique()
+        if score > best_score:
+            best_col = col
+            best_score = score
+    if best_col is None or best_score == 0:
+        raise ValueError("Failed to locate security type column in Marketable sheet")
+    return best_col
+
+
 def extract_marketable_data(xls_path: Path) -> pd.DataFrame:
-    """Load the Marketable sheet and return cleaned CUSIP/maturity/outstanding data."""
+    """Load the Marketable sheet and return cleaned marketable security data."""
     df_raw = pd.read_excel(
         xls_path,
         sheet_name="Marketable",
@@ -93,6 +120,7 @@ def extract_marketable_data(xls_path: Path) -> pd.DataFrame:
     )
 
     cusip_col = _detect_cusip_column(df_raw)
+    security_type_col = _detect_security_type_column(df_raw)
     maturity_col = next(
         (col for col in df_raw.columns if col[0] == "Maturity Date"),
         None,
@@ -115,6 +143,20 @@ def extract_marketable_data(xls_path: Path) -> pd.DataFrame:
     trimmed = df_raw.loc[:, [cusip_col, maturity_col, outstanding_col]].copy()
     trimmed.columns = ["CUSIP", "Maturity Date", "Outstanding"]
 
+    security_types = (
+        df_raw[security_type_col]
+        .where(
+            df_raw[security_type_col]
+            .astype(str)
+            .str.contains("Treasury", case=False, na=False)
+        )
+        .ffill()
+        .astype(str)
+        .str.strip()
+        .replace(SECURITY_TYPE_MAPPING)
+    )
+    trimmed["Security Type"] = security_types
+
     trimmed["CUSIP"] = (
         trimmed["CUSIP"].astype(str).str.strip().str.upper().replace({"NAN": pd.NA})
     )
@@ -123,26 +165,59 @@ def extract_marketable_data(xls_path: Path) -> pd.DataFrame:
     )
     trimmed["Outstanding"] = pd.to_numeric(trimmed["Outstanding"], errors="coerce")
 
-    trimmed = trimmed.dropna(subset=["CUSIP", "Maturity Date", "Outstanding"])
+    trimmed = trimmed.dropna(
+        subset=["CUSIP", "Maturity Date", "Outstanding", "Security Type"]
+    )
     trimmed = trimmed[trimmed["CUSIP"].str.fullmatch(r"[0-9A-Z]{8,9}")]
     trimmed = trimmed[trimmed["Outstanding"] > 0]
+    trimmed = trimmed[trimmed["Security Type"].isin(SECURITY_TYPE_MAPPING.values())]
 
     return trimmed.reset_index(drop=True)
 
 
 def plot_outstanding_by_maturity(data: pd.DataFrame) -> None:
-    """Aggregate outstanding balances by maturity month and display a bar chart."""
+    """Aggregate outstanding balances by maturity month and display a stacked bar chart."""
+
+    type_order = ["T-Notes", "T-Bonds", "TIPS", "FRNs", "T-Bills"]
+    colors = {
+        "T-Notes": "#1f77b4",
+        "T-Bonds": "#ff7f0e",
+        "TIPS": "#2ca02c",
+        "FRNs": "#d62728",
+        "T-Bills": "#9467bd",
+    }
+
     monthly = (
-        data.groupby(pd.Grouper(key="Maturity Date", freq="MS"))["Outstanding"]
+        data.groupby([
+            pd.Grouper(key="Maturity Date", freq="MS"),
+            "Security Type",
+        ])["Outstanding"]
         .sum()
+        .unstack(fill_value=0)
+        .reindex(columns=type_order, fill_value=0)
         .sort_index()
     )
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(monthly.index, monthly.values, width=20)
+    bottom = pd.Series(0, index=monthly.index, dtype=float)
+    for security_type in type_order:
+        values = monthly[security_type]
+        if values.empty:
+            continue
+        ax.bar(
+            monthly.index,
+            values,
+            bottom=bottom,
+            width=20,
+            label=security_type,
+            color=colors[security_type],
+        )
+        bottom = bottom + values
+
     ax.set_title("Marketable Treasury Securities Outstanding by Maturity Month")
     ax.set_xlabel("Maturity Month")
     ax.set_ylabel("Outstanding (Millions of USD)")
+    ax.legend(title="Security Type", loc="upper right")
     fig.autofmt_xdate()
     plt.tight_layout()
     plt.show()
