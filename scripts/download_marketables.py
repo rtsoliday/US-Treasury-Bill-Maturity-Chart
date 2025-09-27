@@ -130,22 +130,22 @@ def extract_marketable_data(xls_path: Path) -> pd.DataFrame:
     return trimmed.reset_index(drop=True)
 
 
-def plot_outstanding_by_maturity(data: pd.DataFrame, destination: Path) -> Path:
-    """Aggregate outstanding balances by maturity date and save a bar chart."""
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    aggregated = data.groupby("Maturity Date", as_index=True)["Outstanding"].sum()
-    aggregated = aggregated.sort_index()
+def plot_outstanding_by_maturity(data: pd.DataFrame) -> None:
+    """Aggregate outstanding balances by maturity month and display a bar chart."""
+    monthly = (
+        data.groupby(pd.Grouper(key="Maturity Date", freq="MS"))["Outstanding"]
+        .sum()
+        .sort_index()
+    )
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(aggregated.index, aggregated.values, width=12)
-    ax.set_title("Marketable Treasury Securities Outstanding by Maturity Date")
-    ax.set_xlabel("Maturity Date")
+    ax.bar(monthly.index, monthly.values, width=20)
+    ax.set_title("Marketable Treasury Securities Outstanding by Maturity Month")
+    ax.set_xlabel("Maturity Month")
     ax.set_ylabel("Outstanding (Millions of USD)")
     fig.autofmt_xdate()
     plt.tight_layout()
-    fig.savefig(destination, dpi=150)
-    plt.close(fig)
-    return destination
+    plt.show()
 
 
 def main() -> None:
@@ -158,8 +158,6 @@ def main() -> None:
     print(f"Latest report date: {latest_report.report_date:%Y-%m-%d}")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-
     xls_path = download_file(latest_report, DATA_DIR / latest_report.filename)
     print(f"Downloaded Excel file to {xls_path}")
 
@@ -168,9 +166,7 @@ def main() -> None:
     marketable.to_csv(output_csv, index=False)
     print(f"Saved cleaned marketable data to {output_csv} ({len(marketable)} rows)")
 
-    chart_path = FIGURE_DIR / "marketable_outstanding_by_maturity.png"
-    plot_outstanding_by_maturity(marketable, chart_path)
-    print(f"Saved maturity schedule chart to {chart_path}")
+    plot_outstanding_by_maturity(marketable)
 
 
 if __name__ == "__main__":
