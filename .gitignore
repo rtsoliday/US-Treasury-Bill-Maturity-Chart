@@ -1,0 +1,4 @@
+outputs/
+*.xls
+*.png
+__pycache__/
